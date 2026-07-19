@@ -1,0 +1,20 @@
+{
+  "name": "stop-game",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "server",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @stop/shared",
+    "build:server": "npm run build -w @stop/server",
+    "build:web": "npm run build -w @stop/web",
+    "build": "npm run build:shared && npm run build:server && npm run build:web",
+    "dev:server": "npm run dev -w @stop/server",
+    "dev:web": "npm run dev -w @stop/web"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

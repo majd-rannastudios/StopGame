@@ -1,0 +1,40 @@
+export type UILang = "en" | "fr" | "ar";
+
+export const STR: Record<string, Record<UILang, string>> = {
+  tagline:      { en: "the letter race", fr: "la course aux lettres", ar: "سباق الحروف" },
+  yourName:     { en: "Your name", fr: "Ton prénom", ar: "اسمك" },
+  createRoom:   { en: "Play with friends", fr: "Jouer entre amis", ar: "العب مع الأصدقاء" },
+  quickMatch:   { en: "Quick match", fr: "Partie rapide", ar: "مباراة سريعة" },
+  joinCode:     { en: "Join with code", fr: "Rejoindre avec un code", ar: "انضم برمز" },
+  code:         { en: "CODE", fr: "CODE", ar: "الرمز" },
+  waiting:      { en: "Waiting for players…", fr: "En attente de joueurs…", ar: "بانتظار اللاعبين…" },
+  ready:        { en: "Ready", fr: "Prêt", ar: "جاهز" },
+  start:        { en: "Start", fr: "Démarrer", ar: "ابدأ" },
+  host:         { en: "Host", fr: "Hôte", ar: "المضيف" },
+  round:        { en: "Round", fr: "Manche", ar: "الجولة" },
+  stop:         { en: "STOP!", fr: "STOP !", ar: "!ستوب" },
+  fillAll:      { en: "Fill every category to STOP", fr: "Remplis tout pour STOP", ar: "املأ كل الفئات لتضغط ستوب" },
+  called:       { en: "called STOP", fr: "a dit STOP", ar: "ضغط ستوب" },
+  timeUp:       { en: "Time's up!", fr: "Temps écoulé !", ar: "!انتهى الوقت" },
+  startsWith:   { en: "starts with", fr: "commence par", ar: "يبدأ بحرف" },
+  unique:       { en: "unique", fr: "unique", ar: "فريد" },
+  duplicate:    { en: "duplicate", fr: "doublon", ar: "مكرر" },
+  invalid:      { en: "invalid", fr: "invalide", ar: "غير صالح" },
+  challenge:    { en: "Challenge", fr: "Contester", ar: "اعتراض" },
+  voteQ:        { en: "Is this a valid answer?", fr: "Réponse valide ?", ar: "هل هذه الإجابة صحيحة؟" },
+  voteValid:    { en: "Valid", fr: "Valide", ar: "صحيحة" },
+  voteInvalid:  { en: "Not valid", fr: "Invalide", ar: "خاطئة" },
+  scoreboard:   { en: "Scoreboard", fr: "Classement", ar: "النتائج" },
+  winner:       { en: "Winner", fr: "Vainqueur", ar: "الفائز" },
+  rematch:      { en: "Rematch", fr: "Revanche", ar: "إعادة" },
+  share:        { en: "Copy invite", fr: "Copier l'invitation", ar: "نسخ الدعوة" },
+  copied:       { en: "Copied!", fr: "Copié !", ar: "!تم النسخ" },
+  fairV:        { en: "verified fair", fr: "équité vérifiée", ar: "عشوائية موثقة" },
+  reconnecting: { en: "Reconnecting…", fr: "Reconnexion…", ar: "…إعادة الاتصال" },
+  needMorePlayers: { en: "Need at least 2 players", fr: "Il faut au moins 2 joueurs", ar: "تحتاج لاعبين اثنين على الأقل" },
+  fillAllFirst: { en: "Fill every category first!", fr: "Remplis toutes les catégories !", ar: "!املأ كل الفئات أولاً" },
+  points:       { en: "pts", fr: "pts", ar: "نقطة" },
+};
+
+export const t = (key: string, lang: UILang) => STR[key]?.[lang] ?? STR[key]?.en ?? key;
+export const isRTL = (lang: UILang) => lang === "ar";
