@@ -7,6 +7,15 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./rooms/MatchRoom";
 import { resolveCode } from "./codeRegistry";
 
+// A single bad client interaction (e.g. joining a room mid-match) must never take down
+// every other room's live match. Log and keep serving instead of letting the process die.
+process.on("uncaughtException", (err) => {
+  console.error("uncaughtException (server kept running):", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection (server kept running):", reason);
+});
+
 const PORT = Number(process.env.PORT || 2567);
 const ORIGIN = process.env.CORS_ORIGIN || "*"; // set to your web origin in production
 
