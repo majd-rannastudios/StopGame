@@ -85,7 +85,6 @@ export class GameClient {
   challenge = (targetPid: string, category: string) => this.room?.send(C2S.CHALLENGE, { targetPid, category });
   vote = (valid: boolean) => this.room?.send(C2S.VOTE, { valid });
   emote = (code: string) => this.room?.send(C2S.EMOTE, { code });
-  rematch = () => this.room?.send(C2S.REMATCH);
   leave = () => { this.room?.leave(); this.room = null; this.notify(); };
 }
 

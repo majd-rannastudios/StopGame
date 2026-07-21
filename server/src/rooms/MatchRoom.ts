@@ -91,7 +91,6 @@ export class MatchRoom extends Room<MatchState> {
     this.onMessage(C2S.CHALLENGE, (c, m) => this.guard(c, () => this.handleChallenge(c, m)));
     this.onMessage(C2S.VOTE, (c, m) => this.guard(c, () => this.handleVote(c, !!m?.valid)));
     this.onMessage(C2S.EMOTE, (c, m) => this.guard(c, () => this.handleEmote(c, m)));
-    this.onMessage(C2S.REMATCH, (c) => this.guard(c, () => this.handleRematch(c)));
   }
 
   /** rate-limit + never let a bad payload crash the room */
@@ -140,14 +139,21 @@ export class MatchRoom extends Room<MatchState> {
     }
     // never let a departure stall the room
     if (this.state.phase === "WRITING") this.maybeAutoStopCheck();
+    if (this.state.phase === "SCORED") this.maybeAdvanceRound();
+    if (this.state.phase === "MATCH_END") this.maybeRematch();
   }
 
   // ---------------- LOBBY ----------------
 
+  /** `ready` is reused across three gates: lobby start, next-round confirm, and rematch confirm. */
   private handleReady(client: Client, ready: boolean) {
-    if (this.state.phase !== "LOBBY") return;
+    const phase = this.state.phase;
+    if (phase !== "LOBBY" && phase !== "SCORED" && phase !== "MATCH_END") return;
     const p = this.state.players.get(client.sessionId);
-    if (p) p.ready = ready;
+    if (!p) return;
+    p.ready = ready;
+    if (phase === "SCORED") this.maybeAdvanceRound();
+    if (phase === "MATCH_END") this.maybeRematch();
   }
 
   private handleStart(client: Client) {
@@ -172,7 +178,7 @@ export class MatchRoom extends Room<MatchState> {
     this.votes = {};
     this.challengesUsed = {};
     this.state.stoppedBy = "";
-    this.state.players.forEach((p) => { p.filledCount = 0; p.roundScore = 0; });
+    this.state.players.forEach((p) => { p.filledCount = 0; p.roundScore = 0; p.ready = false; });
 
     this.draw = this.bag.draw();
     // Provably fair: commit BEFORE revealing the letter
@@ -387,11 +393,21 @@ export class MatchRoom extends Room<MatchState> {
     if (this.state.roundIndex >= this.rules.roundsPerMatch) {
       this.matchEnd();
     } else {
-      this.toPhase("SCORED", this.rules.interRoundSeconds * 1000, () => this.startSpin());
+      // no auto-advance: everyone connected must confirm before the next letter spins
+      this.state.players.forEach((p) => (p.ready = false));
+      this.toPhase("SCORED", 0);
     }
   }
 
+  /** Everyone still connected has confirmed → spin the next round. A departure re-checks this. */
+  private maybeAdvanceRound() {
+    if (this.state.phase !== "SCORED") return;
+    const connected = [...this.state.players.values()].filter((p) => p.connected);
+    if (connected.length > 0 && connected.every((p) => p.ready)) this.startSpin();
+  }
+
   private matchEnd() {
+    this.state.players.forEach((p) => (p.ready = false));
     this.toPhase("MATCH_END", 0);
     const standings = [...this.state.players.values()]
       .sort((a, b) => b.totalScore - a.totalScore)
@@ -406,9 +422,14 @@ export class MatchRoom extends Room<MatchState> {
     });
   }
 
-  private handleRematch(client: Client) {
-    const p = this.state.players.get(client.sessionId);
-    if (!p?.isHost || this.state.phase !== "MATCH_END") return;
+  /** Everyone still connected opted into a rematch → back to the lobby. No one restarts it alone. */
+  private maybeRematch() {
+    if (this.state.phase !== "MATCH_END") return;
+    const connected = [...this.state.players.values()].filter((p) => p.connected);
+    if (connected.length > 0 && connected.every((p) => p.ready)) this.doRematch();
+  }
+
+  private doRematch() {
     this.state.roundIndex = 0;
     this.roundsLog = [];
     this.state.players.forEach((q) => { q.totalScore = 0; q.roundScore = 0; q.ready = false; q.filledCount = 0; });

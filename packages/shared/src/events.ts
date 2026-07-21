@@ -8,7 +8,6 @@ export const C2S = {
   CHALLENGE: "challenge",    // { targetPid: string, category: string }
   VOTE: "vote",              // { valid: boolean }
   EMOTE: "emote",            // { code: string }
-  REMATCH: "rematch",        // {}
 } as const;
 
 export const S2C = {

@@ -39,7 +39,6 @@ export interface Ruleset {
   acceptUncertain: boolean;
 
   reconnectGraceSeconds: number;
-  interRoundSeconds: number;
   spinDurationMs: number;
   validationBudgetMs: number;
   maxAnswerLength: number;
@@ -73,7 +72,6 @@ export const DEFAULT_RULESET: Ruleset = {
   acceptUncertain: true,
 
   reconnectGraceSeconds: 45,
-  interRoundSeconds: 6,
   spinDurationMs: 3800,
   validationBudgetMs: 4500,
   maxAnswerLength: 40,

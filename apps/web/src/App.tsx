@@ -391,7 +391,24 @@ function Reveal({ state, lang, reveal }: { state: any; lang: UILang; reveal: Rev
         ))}
       </div>
 
+      {state.phase === "SCORED" && <NextRoundGate state={state} lang={lang} />}
       {ch?.open && <VoteSheet state={state} lang={lang} reveal={reveal} />}
+    </div>
+  );
+}
+
+function NextRoundGate({ state, lang }: { state: any; lang: UILang }) {
+  const players = playersOf(state);
+  const me = players.find((p) => p.pid === game.room?.sessionId);
+  const connected = players.filter((p) => p.connected);
+  const readyCount = connected.filter((p) => p.ready).length;
+  return (
+    <div className="card stack center" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
+      <div className="muted">{readyCount}/{connected.length} {t("ready", lang)}</div>
+      <button className={`btn ${me?.ready ? "ghost" : "red"}`} onClick={() => game.ready(!me?.ready)}>
+        {me?.ready ? `✓ ${t("ready", lang)}` : t("nextRound", lang)}
+      </button>
+      {me?.ready && <div className="muted center">{t("waitingOthers", lang)}</div>}
     </div>
   );
 }
@@ -429,8 +446,10 @@ function VoteSheet({ state, lang, reveal }: { state: any; lang: UILang; reveal: 
 /* ---------------- PODIUM ---------------- */
 
 function Podium({ state, lang, standings }: { state: any; lang: UILang; standings: any[] }) {
-  const me = game.room?.sessionId;
-  const isHost = playersOf(state).find((p) => p.pid === me)?.isHost;
+  const players = playersOf(state);
+  const me = players.find((p) => p.pid === game.room?.sessionId);
+  const connected = players.filter((p) => p.connected);
+  const readyCount = connected.filter((p) => p.ready).length;
   const [s1, s2, s3] = standings;
   return (
     <div className="stack center">
@@ -452,8 +471,12 @@ function Podium({ state, lang, standings }: { state: any; lang: UILang; standing
         ))}
       </div>
       <div className="spacer" />
-      {isHost && <button className="btn red" onClick={() => game.rematch()}>{t("rematch", lang)}</button>}
-      <button className="btn ghost" onClick={() => { game.leave(); location.reload(); }}>← {t("quickMatch", lang)}?</button>
+      <div className="muted center">{readyCount}/{connected.length} {t("playAgain", lang)}</div>
+      <button className={`btn ${me?.ready ? "ghost" : "red"}`} onClick={() => game.ready(!me?.ready)}>
+        {me?.ready ? `✓ ${t("ready", lang)}` : t("playAgain", lang)}
+      </button>
+      {me?.ready && <div className="muted center">{t("waitingOthers", lang)}</div>}
+      <button className="btn ghost" onClick={() => { game.leave(); location.reload(); }}>{t("leave", lang)}</button>
     </div>
   );
 }
