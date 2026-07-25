@@ -60,10 +60,32 @@ export function startsWithLetter(raw: string, letter: string, lang: Lang): boole
   return nf.startsWith(nl);
 }
 
-/** Cheap gibberish gate: reject 4+ repeated chars or single-char spam. */
-export function looksLikeGibberish(raw: string): boolean {
+const MASH = ["asdf", "sdfg", "qwer", "wert", "zxcv", "xcvb", "hjkl", "uiop", "azer", "qsdf", "wxcv"];
+
+/**
+ * Cheap keyboard-mash gate, run BEFORE the wordlist and the AI referee.
+ * Deliberately conservative: a false positive costs a player real points, and the
+ * AI referee behind it already rejects invented words. It only catches input no
+ * human would submit in earnest.
+ */
+export function looksLikeGibberish(raw: string, lang: Lang = "en"): boolean {
   const t = raw.trim();
   if (t.length < 2) return true;
-  if (/(.)\1{3,}/.test(t)) return true;
+  if (/(.)\1{2,}/.test(t)) return true;                 // aaa, !!!
+  if (/^[^\p{L}]+$/u.test(t)) return true;              // digits/punctuation only
+
+  const low = t.toLowerCase();
+  if (MASH.some((m) => low.includes(m))) return true;   // home-row runs
+
+  // repeated bigram: "abababab"
+  if (/(..)\1{2,}/.test(low)) return true;
+
+  if (lang !== "ar") {
+    const letters = low.replace(/[^a-z]/g, "");
+    if (letters.length >= 3) {
+      if (!/[aeiouy]/.test(letters)) return true;       // no vowel at all
+      if (/[bcdfgjklmnpqstvwxz]{6,}/.test(letters)) return true; // impossible cluster
+    }
+  }
   return false;
 }

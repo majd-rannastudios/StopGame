@@ -5,6 +5,10 @@ export interface AnswerIn {
   raw: string;
   /** verdict from the validation pipeline BEFORE duplicate grouping */
   verdict: Verdict;
+  /** short human-readable justification, shown on the reveal card */
+  reason?: string;
+  /** true once the table has voted on this answer */
+  reviewed?: boolean;
 }
 
 export interface AnswerScored {
@@ -15,6 +19,8 @@ export interface AnswerScored {
   points: number;
   /** playerIds that gave the same normalized answer (excl. self) */
   dupWith: string[];
+  reason?: string;
+  reviewed?: boolean;
 }
 
 export type RoundAnswers = Record<string /*playerId*/, Record<string /*catKey*/, AnswerIn>>;
@@ -73,7 +79,10 @@ export function scoreRound(
         points = unique ? rules.pointsUnique : rules.pointsDuplicate;
       }
 
-      scored[pid][cat.key] = { raw: a.raw, normalized: n, verdict, unique, points, dupWith };
+      scored[pid][cat.key] = {
+        raw: a.raw, normalized: n, verdict, unique, points, dupWith,
+        reason: a.reason, reviewed: a.reviewed,
+      };
       totals[pid] += points;
     }
   }
@@ -107,14 +116,20 @@ export function scoreRound(
   return { scored, totals };
 }
 
-/** Re-score a single category after a challenge flips one verdict. */
+/** Re-score a single category after the table votes a verdict onto one answer. */
 export function applyChallengeFlip(
   answers: RoundAnswers,
   targetPid: string,
   catKey: string,
-  newVerdict: Verdict
+  newVerdict: Verdict,
+  reason?: string
 ): RoundAnswers {
   const next: RoundAnswers = JSON.parse(JSON.stringify(answers));
-  if (next[targetPid]?.[catKey]) next[targetPid][catKey].verdict = newVerdict;
+  const cell = next[targetPid]?.[catKey];
+  if (cell) {
+    cell.verdict = newVerdict;
+    cell.reviewed = true;
+    if (reason) cell.reason = reason;
+  }
   return next;
 }

@@ -10,19 +10,32 @@ export class Player extends Schema {
   @type("boolean") connected = true;
   /** how many categories they've filled — broadcast for pressure; NEVER the words */
   @type("number") filledCount = 0;
+  /** this round's points, still unbanked. Zeroed the moment they land in totalScore. */
   @type("number") roundScore = 0;
+  /** the delta that was last banked — kept only so the UI can show "+40" after the fact */
+  @type("number") lastRoundScore = 0;
   @type("number") totalScore = 0;
   @type("string") emote = "";
 }
 
-export class ChallengeState extends Schema {
+/**
+ * One answer in front of the table for a vote. Raised either by the AI referee
+ * ("I can't confirm this person exists") or by a player's flag.
+ */
+export class ReviewState extends Schema {
   @type("boolean") open = false;
   @type("string") targetPid = "";
+  @type("string") targetName = "";
   @type("string") category = "";
-  @type("string") byPid = "";
+  @type("string") answer = "";
+  /** i18n key ("@..."), or free text written by the referee in the room language */
+  @type("string") reason = "";
+  @type("string") source = ""; // "ai" | "peer"
   @type("number") deadlineTs = 0;
   @type("number") votesValid = 0;
   @type("number") votesInvalid = 0;
+  @type("number") voters = 0;   // how many players are entitled to vote
+  @type("number") remaining = 0; // still queued behind this one
 }
 
 export class MatchState extends Schema {
@@ -38,7 +51,11 @@ export class MatchState extends Schema {
   @type("number") deadlineTs = 0;
   @type("number") serverTime = 0;
   @type("string") stoppedBy = "";
+  /** seconds a writing round lasts — the client's timer bar reads this, never a constant */
+  @type("number") roundSeconds = 120;
+  /** whether the AI referee is configured on this server, so the UI can say so honestly */
+  @type("boolean") aiReferee = false;
   @type(["string"]) categoryKeys = new ArraySchema<string>();
   @type({ map: Player }) players = new MapSchema<Player>();
-  @type(ChallengeState) challenge = new ChallengeState();
+  @type(ReviewState) review = new ReviewState();
 }

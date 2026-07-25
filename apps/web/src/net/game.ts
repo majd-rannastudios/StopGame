@@ -10,10 +10,25 @@ export interface SpinPayload {
   letter: string; poolIndex: number; pool: string[];
   spinSeed: number; rotations: number; commitHash: string; durationMs: number;
 }
+export interface ScoredCell {
+  raw: string; verdict: string; unique: boolean; points: number;
+  dupWith: string[]; reason?: string; reviewed?: boolean;
+}
 export interface RevealPayload {
-  scored: Record<string, Record<string, { raw: string; verdict: string; unique: boolean; points: number; dupWith: string[] }>>;
+  scored: Record<string, Record<string, ScoredCell>>;
   totals: Record<string, number>;
   stoppedBy: string; letter: string; nonce: string; commitHash: string;
+  aiChecked: boolean;
+}
+export interface ReviewResultPayload {
+  targetPid: string; category: string; answer: string;
+  valid: boolean; source: string; votes: { valid: number; invalid: number };
+}
+export interface RoomOptions {
+  lang: string;
+  rounds?: number;
+  difficulty?: "easy" | "hard";
+  roundSeconds?: number;
 }
 
 export class GameClient {
@@ -26,14 +41,14 @@ export class GameClient {
   onSpin: ((p: SpinPayload) => void) | null = null;
   onReveal: ((p: RevealPayload) => void) | null = null;
   onToast: ((key: string, params?: any) => void) | null = null;
-  onChallengeResult: ((p: any) => void) | null = null;
+  onReviewResult: ((p: ReviewResultPayload) => void) | null = null;
   onMatchEnd: ((p: any) => void) | null = null;
   onRestore: ((answers: Record<string, { raw: string }>) => void) | null = null;
 
   private notify = () => this.listeners.forEach((l) => l());
 
-  async createRoom(name: string, lang: string, ranked: boolean) {
-    this.room = await this.client.create("match", { name, lang, ranked, private: true });
+  async createRoom(name: string, opts: RoomOptions) {
+    this.room = await this.client.create("match", { name, ...opts, private: true });
     this.wire();
   }
 
@@ -66,7 +81,7 @@ export class GameClient {
     r.onMessage("spin", (p: SpinPayload) => this.onSpin?.(p));
     r.onMessage("reveal", (p: RevealPayload) => this.onReveal?.(p));
     r.onMessage("toast", (p: any) => this.onToast?.(p.key, p.params));
-    r.onMessage("challengeResult", (p: any) => this.onChallengeResult?.(p));
+    r.onMessage("reviewResult", (p: ReviewResultPayload) => this.onReviewResult?.(p));
     r.onMessage("matchEnd", (p: any) => this.onMatchEnd?.(p));
     r.onMessage("restore", (p: any) => this.onRestore?.(p.answers ?? {}));
     r.onError(() => this.onToast?.("connError"));

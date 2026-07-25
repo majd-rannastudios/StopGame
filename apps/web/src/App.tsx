@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { DEFAULT_CATEGORIES } from "@stop/shared";
-import { game, verifyCommit, SpinPayload, RevealPayload } from "./net/game";
+import { DEFAULT_CATEGORIES, normalizeAnswer, startsWithLetter, Lang } from "@stop/shared";
+import {
+  game, verifyCommit, SpinPayload, RevealPayload, ReviewResultPayload, ScoredCell,
+} from "./net/game";
 import { Wheel } from "./components/Wheel";
-import { t, isRTL, UILang } from "./i18n";
+import { t, isRTL, reasonText, UILang } from "./i18n";
+import { sfx, isMuted, setMuted } from "./sfx";
+
+const CATS = DEFAULT_CATEGORIES;
+const EMOTES = ["🔥", "😮", "😂", "👏", "🫣", "GG"];
 
 /* ---------------- state plumbing ---------------- */
 
@@ -24,21 +30,33 @@ function useGame() {
 
 interface PView {
   pid: string; name: string; seat: number; isHost: boolean; ready: boolean;
-  connected: boolean; filledCount: number; roundScore: number; totalScore: number; emote: string;
+  connected: boolean; filledCount: number; roundScore: number; lastRoundScore: number;
+  totalScore: number; emote: string;
 }
+/** Colyseus only syncs fields that have changed, so every numeric read is defaulted. */
 function playersOf(state: any): PView[] {
   const out: PView[] = [];
   state?.players?.forEach((p: any, pid: string) =>
-    out.push({ pid, name: p.name, seat: p.seat, isHost: p.isHost, ready: p.ready,
-      connected: p.connected, filledCount: p.filledCount, roundScore: p.roundScore,
-      totalScore: p.totalScore, emote: p.emote }));
+    out.push({
+      pid, name: p.name ?? "?", seat: p.seat ?? 0, isHost: !!p.isHost, ready: !!p.ready,
+      connected: p.connected !== false, filledCount: p.filledCount ?? 0,
+      roundScore: p.roundScore ?? 0, lastRoundScore: p.lastRoundScore ?? 0,
+      totalScore: p.totalScore ?? 0, emote: p.emote ?? "",
+    }));
   return out.sort((a, b) => a.seat - b.seat);
 }
+
+/** Banked total. roundScore is zeroed the instant it lands in totalScore, so this
+ *  is correct in every phase and can never double-count a round. */
+const shownScore = (p: PView) => p.totalScore + p.roundScore;
+/** The "+N" delta: live during the reveal, the banked figure afterwards. */
+const shownDelta = (p: PView) => (p.roundScore !== 0 ? p.roundScore : p.lastRoundScore);
 
 function useCountdown(deadlineTs: number) {
   const [ms, setMs] = useState(() => game.remaining(deadlineTs));
   useEffect(() => {
-    const id = setInterval(() => setMs(game.remaining(deadlineTs)), 250);
+    setMs(game.remaining(deadlineTs));
+    const id = setInterval(() => setMs(game.remaining(deadlineTs)), 200);
     return () => clearInterval(id);
   }, [deadlineTs]);
   return ms;
@@ -46,13 +64,18 @@ function useCountdown(deadlineTs: number) {
 
 /* ---------------- shared bits ---------------- */
 
-function TimerBar({ deadlineTs, totalMs, lang }: { deadlineTs: number; totalMs: number; lang: UILang }) {
+function TimerBar({ deadlineTs, totalMs }: { deadlineTs: number; totalMs: number }) {
   const ms = useCountdown(deadlineTs);
   const pct = totalMs > 0 ? Math.max(0, Math.min(100, (ms / totalMs) * 100)) : 0;
   const secs = Math.ceil(ms / 1000);
   const cls = pct < 18 ? "hot" : pct < 45 ? "warn" : "";
+  const last = useRef(secs);
+  useEffect(() => {
+    if (secs !== last.current && secs <= 5 && secs > 0) sfx.tick();
+    last.current = secs;
+  }, [secs]);
   return (
-    <div className="row" aria-live="polite">
+    <div className="row" aria-live="off">
       <div className={`timerBar ${cls}`} style={{ flex: 1 }}><i style={{ width: `${pct}%` }} /></div>
       <div className={`timerNum ${cls === "hot" ? "hot" : ""}`}>{secs}</div>
     </div>
@@ -75,43 +98,116 @@ function Toast({ msg }: { msg: string }) {
   return <div className="toast"><div>{msg}</div></div>;
 }
 
+/** Emotes arrive as "code|timestamp" so a repeat of the same emoji re-triggers. */
+function useEmote(raw: string): string | null {
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (!raw) return;
+    const [code, ts] = raw.split("|");
+    if (!code || Date.now() - Number(ts) > 4000) return;
+    setShown(code);
+    const id = setTimeout(() => setShown(null), 1800);
+    return () => clearTimeout(id);
+  }, [raw]);
+  return shown;
+}
+
+function EmoteBar() {
+  return (
+    <div className="emoteBar">
+      {EMOTES.map((e) => (
+        <button key={e} className="emoteBtn" aria-label={`react ${e}`}
+          onClick={(ev) => { ev.stopPropagation(); sfx.pop(); game.emote(e); }}>
+          {e}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SoundToggle() {
+  const [m, setM] = useState(isMuted);
+  return (
+    <button className="iconBtn" aria-label={m ? "unmute" : "mute"}
+      onClick={() => { setMuted(!m); setM(!m); if (m) sfx.pop(); }}>
+      {m ? "🔇" : "🔊"}
+    </button>
+  );
+}
+
 /* ---------------- HOME ---------------- */
 
 function Home({ lang, setLang, onError }: { lang: UILang; setLang: (l: UILang) => void; onError: (m: string) => void }) {
   const [name, setName] = useState(() => localStorage.getItem("stop.name") ?? "");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(() => new URLSearchParams(location.search).get("join")?.toUpperCase() ?? "");
   const [busy, setBusy] = useState(false);
+  const [rounds, setRounds] = useState(5);
+  const [difficulty, setDifficulty] = useState<"easy" | "hard">("easy");
+  const [secs, setSecs] = useState(90);
   const saveName = (v: string) => { setName(v); localStorage.setItem("stop.name", v); };
 
   const go = async (fn: () => Promise<void>) => {
     if (!name.trim()) { onError(t("yourName", lang)); return; }
     setBusy(true);
-    try { await fn(); } catch (e: any) { onError(e?.message === "room_not_found" ? "Room not found" : "Connection failed"); }
+    try { await fn(); } catch (e: any) {
+      onError(e?.message === "room_not_found" ? "Room not found" : "Connection failed");
+    }
     setBusy(false);
   };
 
   return (
-    <div className="stack" style={{ marginTop: 8 }}>
+    <div className="stack" style={{ marginTop: 4 }}>
+      <div className="topBar">
+        <div className="row" style={{ gap: 6 }}>
+          {(["en", "fr", "ar"] as UILang[]).map((l) => (
+            <button key={l} className={`pill ${l === lang ? "on" : ""}`} onClick={() => setLang(l)}>
+              {l === "en" ? "EN" : l === "fr" ? "FR" : "ع"}
+            </button>
+          ))}
+        </div>
+        <div className="spacer" />
+        <SoundToggle />
+      </div>
+
       <div className="brand">
         <span className="word">STOP!</span>
         <span className="tag">{t("tagline", lang)}</span>
-      </div>
-
-      <div className="row" style={{ justifyContent: "center", gap: 8 }}>
-        {(["en", "fr", "ar"] as UILang[]).map((l) => (
-          <button key={l} className={`btn small ${l === lang ? "red" : "ghost"}`} onClick={() => setLang(l)}>
-            {l === "en" ? "EN" : l === "fr" ? "FR" : "ع"}
-          </button>
-        ))}
       </div>
 
       <input className="input" placeholder={t("yourName", lang)} value={name}
         maxLength={16} onChange={(e) => saveName(e.target.value)}
         autoComplete="off" autoCorrect="off" spellCheck={false} />
 
-      <button className="btn red" disabled={busy} onClick={() => go(() => game.createRoom(name.trim(), lang, false))}>
-        {t("createRoom", lang)}
-      </button>
+      <div className="card stack" style={{ gap: 12 }}>
+        <div className="segRow">
+          <span className="segLabel">{t("rounds", lang)}</span>
+          <div className="seg">
+            {[3, 5, 8].map((r) => (
+              <button key={r} className={rounds === r ? "on" : ""} onClick={() => setRounds(r)}>{r}</button>
+            ))}
+          </div>
+        </div>
+        <div className="segRow">
+          <span className="segLabel">{t("seconds", lang)}</span>
+          <div className="seg">
+            {[60, 90, 120].map((s) => (
+              <button key={s} className={secs === s ? "on" : ""} onClick={() => setSecs(s)}>{s}s</button>
+            ))}
+          </div>
+        </div>
+        <div className="segRow">
+          <span className="segLabel">{t("difficulty", lang)}</span>
+          <div className="seg">
+            <button className={difficulty === "easy" ? "on" : ""} onClick={() => setDifficulty("easy")}>{t("easy", lang)}</button>
+            <button className={difficulty === "hard" ? "on" : ""} onClick={() => setDifficulty("hard")}>{t("hard", lang)}</button>
+          </div>
+        </div>
+        <button className="btn red" disabled={busy}
+          onClick={() => go(() => game.createRoom(name.trim(), { lang, rounds, difficulty, roundSeconds: secs }))}>
+          {t("createRoom", lang)}
+        </button>
+      </div>
+
       <button className="btn" disabled={busy} onClick={() => go(() => game.quickMatch(name.trim(), lang))}>
         {t("quickMatch", lang)}
       </button>
@@ -139,9 +235,18 @@ function Lobby({ state, lang, onToast }: { state: any; lang: UILang; onToast: (m
     const text = `${location.origin}?join=${state.roomCode}`;
     try { await navigator.clipboard.writeText(text); onToast(t("copied", lang)); } catch { /* noop */ }
   };
+  const enough = players.length >= 2;
   return (
     <div className="stack">
-      <div className="brand"><span className="word" style={{ fontSize: 30 }}>STOP!</span></div>
+      <div className="topBar">
+        <span className="chip">{state.totalRounds} × {t("round", lang)}</span>
+        {state.aiReferee && <span className="chip ai">✨ {t("aiRef", lang)}</span>}
+        <div className="spacer" />
+        <SoundToggle />
+      </div>
+
+      <div className="brand"><span className="word" style={{ fontSize: 32 }}>STOP!</span></div>
+
       <div className="card stack" style={{ gap: 6 }}>
         <div className="muted center">{t("code", lang)}</div>
         <div className="codebox" onClick={copyInvite} title="copy">{state.roomCode}</div>
@@ -154,22 +259,24 @@ function Lobby({ state, lang, onToast }: { state: any; lang: UILang; onToast: (m
         {players.map((p) => (
           <div key={p.pid} className="playerRow">
             <Avatar name={p.name} />
-            <div style={{ flex: 1 }}>
-              <div>{p.name}{p.pid === me?.pid ? " ✦" : ""}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="ellipsis">{p.name}{p.pid === me?.pid ? " ✦" : ""}</div>
               <div className="muted" style={{ fontSize: 11 }}>{p.isHost ? t("host", lang) : ""}</div>
             </div>
             <span className={`dot ${p.connected ? "" : "off"}`} />
-            {p.ready && <span className="chip" style={{ borderColor: "var(--green)", color: "var(--green)" }}>{t("ready", lang)}</span>}
+            {p.ready && <span className="chip ok">{t("ready", lang)}</span>}
           </div>
         ))}
-        {players.length < 2 && <div className="muted center">{t("waiting", lang)}</div>}
+        {!enough && <div className="muted center">{t("waiting", lang)}</div>}
       </div>
 
       <div className="spacer" />
       {me?.isHost ? (
-        <button className="btn red" onClick={() => game.start()}>{t("start", lang)}</button>
+        <button className="btn red" disabled={!enough} onClick={() => { sfx.pop(); game.start(); }}>
+          {t("start", lang)}
+        </button>
       ) : (
-        <button className={`btn ${me?.ready ? "ghost" : ""}`} onClick={() => game.ready(!me?.ready)}>
+        <button className={`btn ${me?.ready ? "ghost" : ""}`} onClick={() => { sfx.pop(); game.ready(!me?.ready); }}>
           {me?.ready ? "✓ " : ""}{t("ready", lang)}
         </button>
       )}
@@ -180,6 +287,7 @@ function Lobby({ state, lang, onToast }: { state: any; lang: UILang; onToast: (m
 /* ---------------- SPIN ---------------- */
 
 function SpinScreen({ state, lang, spin }: { state: any; lang: UILang; spin: SpinPayload | null }) {
+  const ms = useCountdown(state.deadlineTs);
   return (
     <div className="stack center">
       <div className="muted" style={{ marginTop: 10 }}>
@@ -191,15 +299,13 @@ function SpinScreen({ state, lang, spin }: { state: any; lang: UILang; spin: Spi
           poolIndex={spin.poolIndex}
           rotations={spin.rotations}
           durationMs={spin.durationMs}
-          muted={localStorage.getItem("stop.muted") === "1"}
+          muted={isMuted()}
         />
       ) : (
-        <div className="muted" style={{ padding: 60 }}>…</div>
+        <div className="bigLetter" style={{ padding: "40px 0" }}>{Math.max(1, Math.ceil(ms / 1000))}</div>
       )}
       {spin?.commitHash && (
-        <div className="fairBadge" title={spin.commitHash}>
-          🔒 {spin.commitHash.slice(0, 12)}…
-        </div>
+        <div className="fairBadge" title={spin.commitHash}>🔒 {spin.commitHash.slice(0, 12)}…</div>
       )}
     </div>
   );
@@ -207,15 +313,26 @@ function SpinScreen({ state, lang, spin }: { state: any; lang: UILang; spin: Spi
 
 /* ---------------- PLAY ---------------- */
 
+/** Instant, client-only feedback. The server still decides; this just stops
+ *  a player wasting the round on an answer that can't possibly count. */
+function localHint(value: string, letter: string, lang: Lang, others: string[]): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (!startsWithLetter(v, letter, lang)) return "mustStart";
+  const n = normalizeAnswer(v, lang);
+  if (n && others.includes(n)) return "sameTwice";
+  return null;
+}
+
 function Play({ state, lang }: { state: any; lang: UILang }) {
-  const cats = DEFAULT_CATEGORIES;
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const inputs = useRef<Record<string, HTMLInputElement | null>>({});
   const players = playersOf(state);
   const me = players.find((p) => p.pid === game.room?.sessionId);
   const others = players.filter((p) => p.pid !== me?.pid);
-  const totalMs = 120_000;
+  const totalMs = (state.roundSeconds || 120) * 1000;
+  const roomLang = state.language as Lang;
 
   useEffect(() => {
     game.onRestore = (a) => {
@@ -223,9 +340,8 @@ function Play({ state, lang }: { state: any; lang: UILang }) {
       for (const [k, v] of Object.entries(a)) next[k] = (v as any).raw ?? "";
       setAnswers(next);
     };
-    // reset per round
     setAnswers({});
-    setTimeout(() => inputs.current[cats[0].key]?.focus(), 250);
+    setTimeout(() => inputs.current[CATS[0].key]?.focus(), 250);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.roundIndex]);
 
@@ -239,71 +355,85 @@ function Play({ state, lang }: { state: any; lang: UILang }) {
     game.answer(key, answers[key] ?? "");
   };
   const jumpNext = (i: number) => {
-    flush(cats[i].key);
-    const next = cats[i + 1]?.key;
+    flush(CATS[i].key);
+    const next = CATS[i + 1]?.key;
     if (next) inputs.current[next]?.focus();
+    else (document.activeElement as HTMLElement)?.blur();
   };
 
-  const allFilled = cats.every((c) => (answers[c.key] ?? "").trim());
+  const filledCount = CATS.filter((c) => (answers[c.key] ?? "").trim()).length;
+  const allFilled = filledCount === CATS.length;
   const grace = state.phase === "STOP_GRACE";
   const graceMs = useCountdown(grace ? state.deadlineTs : 0);
   const stopper = players.find((p) => p.pid === state.stoppedBy);
 
+  useEffect(() => { if (grace) sfx.alarm(); }, [grace]);
+
   return (
     <div className="stack" style={{ gap: 10 }}>
-      <div className="row">
-        <span className="chip letter">{state.letter}</span>
+      <div className="topBar">
+        <span className="chip letter big">{state.letter}</span>
         <span className="muted">{t("round", lang)} {state.roundIndex + 1}/{state.totalRounds}</span>
         <div className="spacer" />
-        <span className="muted">{t("startsWith", lang)} “{state.letter}”</span>
+        <span className="progressPill">{filledCount}/{CATS.length}</span>
       </div>
-      <TimerBar deadlineTs={state.deadlineTs} totalMs={totalMs} lang={lang} />
+      <TimerBar deadlineTs={state.deadlineTs} totalMs={totalMs} />
 
       <div className="oppStrip" aria-label="opponents progress">
-        {others.map((p) => (
-          <div key={p.pid} className="oppPill">
-            <Avatar name={p.name} mini />
-            <span>{p.name}</span>
-            <span className="oppFill">{p.filledCount}/{cats.length}</span>
-            {!p.connected && <span className="dot off" />}
-          </div>
-        ))}
+        {others.map((p) => <OppPill key={p.pid} p={p} total={CATS.length} />)}
       </div>
 
       <div className="stack" style={{ gap: 9 }}>
-        {cats.map((c, i) => {
+        {CATS.map((c, i) => {
           const v = answers[c.key] ?? "";
+          const mine = CATS.filter((o) => o.key !== c.key)
+            .map((o) => normalizeAnswer(answers[o.key] ?? "", roomLang))
+            .filter(Boolean);
+          const hint = localHint(v, state.letter, roomLang, mine);
+          const ok = v.trim() && !hint;
           return (
             <div className="catRow" key={c.key}>
               <label className="catLabel" htmlFor={`f-${c.key}`}>
-                {c.label[lang]} {v.trim() && <span style={{ color: "var(--green)" }}>✓</span>}
+                <span className="catIcon" aria-hidden="true">{c.icon}</span>
+                {c.label[lang]}
+                {ok && <span className="tickOk">✓</span>}
               </label>
               <input
                 id={`f-${c.key}`}
                 ref={(el) => { inputs.current[c.key] = el; }}
-                className={`input ${v.trim() ? "filled" : ""}`}
+                className={`input ${ok ? "filled" : ""} ${hint ? "warnInput" : ""}`}
                 value={v}
                 placeholder={`${state.letter}…`}
                 maxLength={40}
-                enterKeyHint={i === cats.length - 1 ? "done" : "next"}
+                enterKeyHint={i === CATS.length - 1 ? "done" : "next"}
                 autoComplete="off" autoCorrect="off" spellCheck={false} autoCapitalize="words"
                 onChange={(e) => setAns(c.key, e.target.value)}
                 onBlur={() => flush(c.key)}
                 onKeyDown={(e) => { if (e.key === "Enter") jumpNext(i); }}
               />
+              {hint && (
+                <div className="fieldHint">
+                  {hint === "mustStart"
+                    ? `${t("mustStart", lang)} “${state.letter}”`
+                    : t("sameTwice", lang)}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
+      <EmoteBar />
+
       <button
         className={`stopBtn ${allFilled ? "armed" : ""}`}
         disabled={!allFilled || grace}
         aria-label={t("stop", lang)}
-        onClick={() => { cats.forEach((c) => flush(c.key)); game.stop(); }}
+        onClick={() => { sfx.alarm(); CATS.forEach((c) => flush(c.key)); game.stop(); }}
       >
         {t("stop", lang)}
       </button>
+      {!allFilled && <div className="muted center">{t("fillAllToStop", lang)}</div>}
 
       {grace && (
         <div className="overlay">
@@ -321,55 +451,107 @@ function Play({ state, lang }: { state: any; lang: UILang }) {
   );
 }
 
+function OppPill({ p, total }: { p: PView; total: number }) {
+  const emote = useEmote(p.emote);
+  return (
+    <div className="oppPill">
+      <Avatar name={p.name} mini />
+      <span className="ellipsis" style={{ maxWidth: 72 }}>{p.name}</span>
+      <span className="oppBar"><i style={{ width: `${(p.filledCount / total) * 100}%` }} /></span>
+      {!p.connected && <span className="dot off" />}
+      {emote && <span className="emoteFloat">{emote}</span>}
+    </div>
+  );
+}
+
+/* ---------------- CHECKING ---------------- */
+
+function Checking({ state, lang }: { state: any; lang: UILang }) {
+  return (
+    <div className="stack center" style={{ gap: 18, paddingTop: 60 }}>
+      <span className="chip letter big">{state.letter}</span>
+      <div className="scanner"><i /></div>
+      <div className="display" style={{ fontSize: 18 }}>{t("checking", lang)}</div>
+      {state.aiReferee && <div className="muted">✨ {t("aiRef", lang)}</div>}
+    </div>
+  );
+}
+
 /* ---------------- REVEAL ---------------- */
 
+function cellClass(a: ScoredCell | undefined): string {
+  if (!a || !a.raw.trim() || a.verdict === "empty") return "bad";
+  if (a.verdict === "invalid") return "bad";
+  if (a.verdict === "uncertain") return "pend";
+  return a.unique ? "unique" : "dup";
+}
+
 function Reveal({ state, lang, reveal }: { state: any; lang: UILang; reveal: RevealPayload | null }) {
-  const cats = DEFAULT_CATEGORIES;
   const players = playersOf(state);
   const me = game.room?.sessionId;
   const [stage, setStage] = useState(0);
   const [fair, setFair] = useState<boolean | null>(null);
+  const review = state.review;
 
-  useEffect(() => { setStage(0); }, [state.roundIndex]);
+  // A new round's reveal always starts from the first card. Re-broadcasts caused by
+  // a table vote re-score must NOT rewind the animation, so this keys off the phase
+  // transition into LOCKED, never off roundIndex (which ticks over at SCORED).
+  useEffect(() => { if (state.phase === "LOCKED") setStage(0); }, [state.phase]);
+
   useEffect(() => {
     if (!reveal) return;
     if (reveal.nonce) verifyCommit(reveal.letter, reveal.nonce, reveal.commitHash).then(setFair);
-    const id = setInterval(() => setStage((s) => Math.min(cats.length, s + 1)), 3200);
-    return () => clearInterval(id);
-  }, [reveal, cats.length]);
+  }, [reveal]);
 
-  const ch = state.challenge;
-  if (!reveal) return <div className="muted center" style={{ padding: 40 }}>…</div>;
+  useEffect(() => {
+    if (!reveal || stage >= CATS.length) return;
+    const id = setTimeout(() => { setStage((s) => s + 1); sfx.pop(); }, 850);
+    return () => clearTimeout(id);
+  }, [reveal, stage]);
+
+  if (!reveal) return <Checking state={state} lang={lang} />;
+
+  const visible = CATS.slice(0, Math.max(1, stage));
+  const canReady = state.phase === "REVEAL" || state.phase === "SCORED";
 
   return (
-    <div className="stack" style={{ gap: 12 }} onClick={() => setStage((s) => Math.min(cats.length, s + 1))}>
-      <div className="row">
+    <div className="stack" style={{ gap: 12 }} onClick={() => setStage(CATS.length)}>
+      <div className="topBar">
         <span className="chip letter">{reveal.letter}</span>
-        <span className="muted">{t("round", lang)} {state.roundIndex + 1}</span>
+        <span className="muted">{t("round", lang)} {Math.min(state.roundIndex + 1, state.totalRounds)}/{state.totalRounds}</span>
         <div className="spacer" />
         {fair === true && <span className="fairBadge">✓ {t("fairV", lang)}</span>}
       </div>
 
-      {cats.slice(0, Math.max(1, stage + 1)).map((c) => (
+      {visible.map((c) => (
         <div className="card revealCat" key={c.key}>
-          <div className="catLabel">{c.label[lang]}</div>
+          <div className="catLabel">
+            <span className="catIcon" aria-hidden="true">{c.icon}</span>{c.label[lang]}
+          </div>
           {players.map((p) => {
             const a = reveal.scored[p.pid]?.[c.key];
-            const cls = !a || !a.raw.trim() || a.verdict === "invalid" || a.verdict === "empty"
-              ? "bad" : a.unique ? "unique" : "dup";
-            const pts = a?.points ?? 0;
+            const cls = cellClass(a);
             const canFlag =
               state.phase === "REVEAL" && p.pid !== me && a && a.raw.trim() &&
-              a.verdict !== "invalid" && a.verdict !== "empty" && !ch?.open;
+              a.verdict === "valid" && !a.reviewed && !review?.open;
+            const why = reasonText(a?.reason, lang);
             return (
               <div className={`ansRow ${cls}`} key={p.pid}>
                 <Avatar name={p.name} mini />
-                <span className="ansText">{a?.raw?.trim() || "—"}</span>
-                {a?.verdict === "uncertain" && <span className="muted" style={{ fontSize: 10 }}>?</span>}
-                <span className={`pts ${cls === "unique" ? "u" : cls === "dup" ? "d" : "z"}`}>+{pts}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="ansText">{a?.raw?.trim() || "—"}</div>
+                  {why && <div className="ansWhy">{why}</div>}
+                </div>
+                <span className={`badge ${cls}`}>
+                  {cls === "unique" ? t("unique", lang)
+                    : cls === "dup" ? t("duplicate", lang)
+                    : cls === "pend" ? t("underReview", lang)
+                    : a?.raw?.trim() ? t("invalid", lang) : t("blank", lang)}
+                </span>
+                <span className={`pts ${cls}`}>+{a?.points ?? 0}</span>
                 {canFlag && (
                   <button className="flag" title={t("challenge", lang)}
-                    onClick={(e) => { e.stopPropagation(); game.challenge(p.pid, c.key); }}>
+                    onClick={(e) => { e.stopPropagation(); sfx.pop(); game.challenge(p.pid, c.key); }}>
                     🚩
                   </button>
                 )}
@@ -381,18 +563,20 @@ function Reveal({ state, lang, reveal }: { state: any; lang: UILang; reveal: Rev
 
       <div className="card">
         <div className="catLabel">{t("scoreboard", lang)}</div>
-        {[...players].sort((a, b) => (b.totalScore + b.roundScore) - (a.totalScore + a.roundScore)).map((p, i) => (
-          <div className="row" key={p.pid} style={{ padding: "6px 2px" }}>
+        {[...players].sort((a, b) => shownScore(b) - shownScore(a)).map((p, i) => (
+          <div className={`scoreRow ${i === 0 ? "first" : ""}`} key={p.pid}>
             <span className="rankNum">{i + 1}</span>
-            <span style={{ flex: 1 }}>{p.name}</span>
-            <span className="muted">+{reveal.totals[p.pid] ?? 0}</span>
-            <span className="scoreVal">{p.totalScore + p.roundScore}</span>
+            <Avatar name={p.name} mini />
+            <span className="ellipsis" style={{ flex: 1 }}>{p.name}</span>
+            <span className="delta">+{shownDelta(p)}</span>
+            <span className="scoreVal">{shownScore(p)}</span>
           </div>
         ))}
       </div>
 
-      {state.phase === "SCORED" && <NextRoundGate state={state} lang={lang} />}
-      {ch?.open && <VoteSheet state={state} lang={lang} reveal={reveal} />}
+      <EmoteBar />
+      {canReady && <NextRoundGate state={state} lang={lang} />}
+      {review?.open && <VoteSheet state={state} lang={lang} />}
     </div>
   );
 }
@@ -402,42 +586,77 @@ function NextRoundGate({ state, lang }: { state: any; lang: UILang }) {
   const me = players.find((p) => p.pid === game.room?.sessionId);
   const connected = players.filter((p) => p.connected);
   const readyCount = connected.filter((p) => p.ready).length;
+  const blocked = state.review?.open;
   return (
-    <div className="card stack center" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
+    <div className="card stack center gate" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
+      <div className="readyDots">
+        {connected.map((p) => (
+          <span key={p.pid} className={`readyDot ${p.ready ? "on" : ""}`} title={p.name} />
+        ))}
+      </div>
       <div className="muted">{readyCount}/{connected.length} {t("ready", lang)}</div>
-      <button className={`btn ${me?.ready ? "ghost" : "red"}`} onClick={() => game.ready(!me?.ready)}>
+      <button className={`btn ${me?.ready ? "ghost" : "red"}`} disabled={blocked}
+        onClick={() => { sfx.pop(); game.ready(!me?.ready); }}>
         {me?.ready ? `✓ ${t("ready", lang)}` : t("nextRound", lang)}
       </button>
-      {me?.ready && <div className="muted center">{t("waitingOthers", lang)}</div>}
+      {me?.ready && !blocked && <div className="muted center">{t("waitingOthers", lang)}</div>}
     </div>
   );
 }
 
-function VoteSheet({ state, lang, reveal }: { state: any; lang: UILang; reveal: RevealPayload }) {
-  const ch = state.challenge;
-  const players = playersOf(state);
-  const target = players.find((p) => p.pid === ch.targetPid);
-  const cat = DEFAULT_CATEGORIES.find((c) => c.key === ch.category);
-  const answer = reveal.scored[ch.targetPid]?.[ch.category]?.raw ?? "";
+/* ---------------- TABLE VOTE ---------------- */
+
+function VoteSheet({ state, lang }: { state: any; lang: UILang }) {
+  const r = state.review;
+  const cat = CATS.find((c) => c.key === r.category);
   const me = game.room?.sessionId;
+  const iAmTarget = me === r.targetPid;
   const [voted, setVoted] = useState(false);
-  useEffect(() => setVoted(false), [ch.targetPid, ch.category]);
-  const iAmTarget = me === ch.targetPid;
+  const ms = useCountdown(r.deadlineTs);
+  useEffect(() => { setVoted(false); sfx.alarm(); }, [r.targetPid, r.category, r.answer]);
+
+  const cast = (valid: boolean) => {
+    setVoted(true);
+    if (valid) sfx.good(); else sfx.bad();
+    game.vote(valid);
+  };
 
   return (
     <div className="sheet stack center" onClick={(e) => e.stopPropagation()}>
-      <div className="muted">{target?.name} — {cat?.label[lang]}</div>
-      <div className="display" style={{ fontSize: 26 }}>“{answer}”</div>
-      <div className="muted">{t("voteQ", lang)}</div>
-      <div className="row" style={{ justifyContent: "center" }}>
-        <button className="btn small" disabled={voted || iAmTarget}
-          onClick={() => { game.vote(true); setVoted(true); }}>
-          ✓ {t("voteValid", lang)} ({ch.votesValid})
-        </button>
-        <button className="btn small red" disabled={voted || iAmTarget}
-          onClick={() => { game.vote(false); setVoted(true); }}>
-          ✗ {t("voteInvalid", lang)} ({ch.votesInvalid})
-        </button>
+      <div className="sheetHead">
+        <span className="chip warn">⚖️ {t("tableVote", lang)}</span>
+        <div className="spacer" />
+        <span className="voteClock">{Math.max(0, Math.ceil(ms / 1000))}</span>
+      </div>
+
+      <div className="muted center">
+        {r.source === "peer" ? t("peerFlagHdr", lang) : t("aiUnsureHdr", lang)}
+      </div>
+      <div className="muted center" style={{ fontSize: 11 }}>
+        {r.targetName} · {cat?.icon} {cat?.label[lang]}
+      </div>
+      <div className="display voteWord">“{r.answer}”</div>
+      {reasonText(r.reason, lang) && <div className="muted center">{reasonText(r.reason, lang)}</div>}
+
+      {iAmTarget ? (
+        <div className="muted center" style={{ padding: "10px 0" }}>{t("yourAnswer", lang)}</div>
+      ) : (
+        <>
+          <div className="muted">{t("voteQ", lang)}</div>
+          <div className="row" style={{ justifyContent: "center", gap: 12 }}>
+            <button className="btn voteBtn ok" disabled={voted} onClick={() => cast(true)}>
+              ✓ {t("voteValid", lang)}
+            </button>
+            <button className="btn voteBtn no" disabled={voted} onClick={() => cast(false)}>
+              ✗ {t("voteInvalid", lang)}
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="muted" style={{ fontSize: 11 }}>
+        {r.votesValid + r.votesInvalid}/{r.voters} {t("votesIn", lang)}
+        {r.remaining > 0 && ` · ${r.remaining} ${t("moreQueued", lang)}`}
       </div>
     </div>
   );
@@ -451,6 +670,7 @@ function Podium({ state, lang, standings }: { state: any; lang: UILang; standing
   const connected = players.filter((p) => p.connected);
   const readyCount = connected.filter((p) => p.ready).length;
   const [s1, s2, s3] = standings;
+  useEffect(() => { sfx.win(); }, []);
   return (
     <div className="stack center">
       <div className="brand"><span className="word" style={{ fontSize: 30 }}>STOP!</span></div>
@@ -470,9 +690,10 @@ function Podium({ state, lang, standings }: { state: any; lang: UILang; standing
           </div>
         ))}
       </div>
+      <EmoteBar />
       <div className="spacer" />
       <div className="muted center">{readyCount}/{connected.length} {t("playAgain", lang)}</div>
-      <button className={`btn ${me?.ready ? "ghost" : "red"}`} onClick={() => game.ready(!me?.ready)}>
+      <button className={`btn ${me?.ready ? "ghost" : "red"}`} onClick={() => { sfx.pop(); game.ready(!me?.ready); }}>
         {me?.ready ? `✓ ${t("ready", lang)}` : t("playAgain", lang)}
       </button>
       {me?.ready && <div className="muted center">{t("waitingOthers", lang)}</div>}
@@ -515,18 +736,11 @@ export default function App() {
     game.onReveal = (p) => setReveal(p);
     game.onMatchEnd = (p) => setStandings(p.standings ?? []);
     game.onToast = (key) => showToast(t(key, roomLang));
-    game.onChallengeResult = (p) =>
-      showToast(p.upheld ? `🚩 ${t("invalid", roomLang)}` : `✓ ${t("voteValid", roomLang)}`);
+    game.onReviewResult = (p: ReviewResultPayload) => {
+      if (p.valid) sfx.good(); else sfx.bad();
+      showToast(`“${p.answer}” — ${p.valid ? t("accepted", roomLang) : t("rejected", roomLang)} ${p.votes.valid}–${p.votes.invalid}`);
+    };
   }, [roomLang, showToast]);
-
-  // deep-link join: ?join=CODE
-  useEffect(() => {
-    const code = new URLSearchParams(location.search).get("join");
-    if (code) {
-      const el = document.querySelector<HTMLInputElement>(".input.code");
-      if (el) el.value = code.toUpperCase();
-    }
-  }, []);
 
   const phase = state?.phase ?? "NONE";
 
@@ -535,9 +749,11 @@ export default function App() {
       <Toast msg={toast} />
       {phase === "NONE" && <Home lang={lang} setLang={setLang} onError={showToast} />}
       {phase === "LOBBY" && <Lobby state={state} lang={roomLang} onToast={showToast} />}
-      {(phase === "COUNTDOWN" || phase === "SPINNING") && <SpinScreen state={state} lang={roomLang} spin={phase === "SPINNING" ? spin : null} />}
+      {(phase === "COUNTDOWN" || phase === "SPINNING") &&
+        <SpinScreen state={state} lang={roomLang} spin={phase === "SPINNING" ? spin : null} />}
       {(phase === "WRITING" || phase === "STOP_GRACE") && <Play state={state} lang={roomLang} />}
-      {(phase === "LOCKED" || phase === "REVEAL" || phase === "SCORED") && <Reveal state={state} lang={roomLang} reveal={reveal} />}
+      {phase === "LOCKED" && <Checking state={state} lang={roomLang} />}
+      {(phase === "REVEAL" || phase === "SCORED") && <Reveal state={state} lang={roomLang} reveal={reveal} />}
       {phase === "MATCH_END" && <Podium state={state} lang={roomLang} standings={standings} />}
     </div>
   );
