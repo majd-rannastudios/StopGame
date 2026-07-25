@@ -51,7 +51,12 @@ export interface Ruleset {
 
   reconnectGraceSeconds: number;
   spinDurationMs: number;
-  /** wall-clock ceiling for the whole AI referee step; the reveal never waits longer */
+  /**
+   * Wall-clock CEILING for the AI referee, not a wait: the reveal fires the moment
+   * the answer comes back (measured ~0.7–2.6s for a full table). This only bites
+   * when the API is slow, and blowing it sends that round to the table vote —
+   * so it wants roughly 2x the observed worst case, not more.
+   */
   validationBudgetMs: number;
   /** per-category stagger while the reveal plays out */
   revealStepMs: number;
@@ -88,7 +93,7 @@ export const DEFAULT_RULESET: Ruleset = {
 
   reconnectGraceSeconds: 45,
   spinDurationMs: 3800,
-  validationBudgetMs: 9000,
+  validationBudgetMs: 4000,
   revealStepMs: 1100,
   maxAnswerLength: 40,
 };
