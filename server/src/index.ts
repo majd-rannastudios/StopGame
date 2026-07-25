@@ -7,12 +7,25 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./rooms/MatchRoom";
 import { resolveCode } from "./codeRegistry";
 
-// A single bad client interaction (e.g. joining a room mid-match) must never take down
-// every other room's live match. Log and keep serving instead of letting the process die.
+/**
+ * A single bad client interaction (e.g. joining a room mid-match) must never take down
+ * every other room's live match. Log and keep serving instead of letting the process die.
+ *
+ * The guard only arms once we are actually listening: a crash during boot — a port
+ * already in use, a bad config — has to be fatal. Swallowing it leaves a process that
+ * answers nothing while looking perfectly alive.
+ */
+let serving = false;
+const fatal = (label: string, err: unknown) => {
+  console.error(`${label} during startup — exiting:`, err);
+  process.exit(1);
+};
 process.on("uncaughtException", (err) => {
+  if (!serving) return fatal("uncaughtException", err);
   console.error("uncaughtException (server kept running):", err);
 });
 process.on("unhandledRejection", (reason) => {
+  if (!serving) return fatal("unhandledRejection", reason);
   console.error("unhandledRejection (server kept running):", reason);
 });
 
@@ -62,4 +75,10 @@ const server = new Server({
 });
 server.define("match", MatchRoom);
 
-server.listen(PORT).then(() => console.log(`⛔ STOP game server listening on :${PORT}`));
+server
+  .listen(PORT)
+  .then(() => {
+    serving = true;
+    console.log(`⛔ STOP game server listening on :${PORT}`);
+  })
+  .catch((err) => fatal("listen failed", err));
