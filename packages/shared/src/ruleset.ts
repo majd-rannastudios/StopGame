@@ -10,6 +10,16 @@ export interface CategoryDef {
   label: Record<Lang, string>;
   /** the membership test handed to the AI referee, verbatim */
   aiRule: string;
+  /**
+   * May an unsure verdict here go to a table vote?
+   *
+   * Only true for the two categories where a human genuinely knows something the
+   * referee can't: a given name, and a locally-famous person. Whether something is
+   * an animal or a city is a matter of fact — the referee decides those alone, and
+   * an unsure verdict is accepted rather than put to the room. Players can still
+   * flag any answer by hand; this governs the AUTOMATIC queue only.
+   */
+  humanReviewable?: boolean;
   /** optional tightening, e.g. "cities in Saudi Arabia" — fed to validators */
   constraint?: string;
 }
@@ -36,7 +46,7 @@ export interface Ruleset {
   pointsInvalid: number;
   stopBonus: number;
 
-  /** answers the AI could not settle go to a table vote instead of silently passing */
+  /** unsure NAMES and PEOPLE go to a table vote instead of silently passing */
   enablePeerReview: boolean;
   reviewVoteSeconds: number;
   /** hard cap so one messy round can't turn the reveal into a committee meeting */
@@ -87,7 +97,7 @@ export const DEFAULT_RULESET: Ruleset = {
 
   enablePeerReview: true,
   reviewVoteSeconds: 12,
-  maxReviewsPerRound: 6,
+  maxReviewsPerRound: 3,
   maxChallengesPerPlayerPerRound: 2,
   acceptUncertain: true,
 

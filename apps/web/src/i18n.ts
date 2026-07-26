@@ -5,6 +5,10 @@ export const STR: Record<string, Record<UILang, string>> = {
   yourName:     { en: "Your name", fr: "Ton prénom", ar: "اسمك" },
   createRoom:   { en: "Play with friends", fr: "Jouer entre amis", ar: "العب مع الأصدقاء" },
   quickMatch:   { en: "Quick match", fr: "Partie rapide", ar: "مباراة سريعة" },
+  soloPlay:     { en: "Solo — beat the clock", fr: "Solo — contre la montre", ar: "فردي — تحدَّ الوقت" },
+  soloDone:     { en: "Final score", fr: "Score final", ar: "النتيجة النهائية" },
+  soloAgain:    { en: "Play again", fr: "Rejouer", ar: "العب مرة أخرى" },
+  soloNoRivals: { en: "Just you and the timer", fr: "Toi et le chrono", ar: "أنت والوقت فقط" },
   joinCode:     { en: "Join with code", fr: "Rejoindre avec un code", ar: "انضم برمز" },
   code:         { en: "CODE", fr: "CODE", ar: "الرمز" },
   waiting:      { en: "Waiting for players…", fr: "En attente de joueurs…", ar: "بانتظار اللاعبين…" },
@@ -50,6 +54,7 @@ export const STR: Record<string, Record<UILang, string>> = {
   /* --- checking / reveal --- */
   checking:     { en: "Checking answers…", fr: "Vérification…", ar: "…جارٍ التحقق" },
   aiRef:        { en: "AI referee", fr: "arbitre IA", ar: "حكم ذكي" },
+  validBadge:   { en: "Valid", fr: "Valide", ar: "صحيحة" },
   unique:       { en: "Only one!", fr: "Unique !", ar: "!فريدة" },
   duplicate:    { en: "Shared", fr: "Partagé", ar: "مكررة" },
   blank:        { en: "Blank", fr: "Vide", ar: "فارغة" },

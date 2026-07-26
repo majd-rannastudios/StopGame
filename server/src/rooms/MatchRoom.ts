@@ -18,6 +18,8 @@ interface CreateOptions {
   roundSeconds?: number;
   ranked?: boolean;
   private?: boolean;
+  /** one player against the clock */
+  solo?: boolean;
 }
 
 interface ReviewItem {
@@ -73,9 +75,14 @@ export class MatchRoom extends Room<MatchState> {
     const lang: Lang = (["en", "fr", "ar"] as Lang[]).includes(options.lang as Lang)
       ? (options.lang as Lang) : "en";
     const ranked = !!options.ranked;
+    const solo = !!options.solo;
 
     this.rules = {
       ...DEFAULT_RULESET,
+      // Solo is one player against the clock: nobody to duplicate against and nobody
+      // to put an answer to, so the referee is the only judge in the room.
+      minPlayers: solo ? 1 : DEFAULT_RULESET.minPlayers,
+      enablePeerReview: solo ? false : DEFAULT_RULESET.enablePeerReview,
       language: lang,
       categories: DEFAULT_CATEGORIES,
       letterPool: resolvePool(lang, options.difficulty ?? "easy"),
@@ -86,7 +93,9 @@ export class MatchRoom extends Room<MatchState> {
       penalizeFalseStop: true,
     };
 
+    if (solo) this.maxClients = 1; // nobody else can wander in
     this.setState(new MatchState());
+    this.state.solo = solo;
     this.state.language = lang;
     this.state.totalRounds = this.rules.roundsPerMatch;
     this.state.roundSeconds = this.rules.maxRoundSeconds;
@@ -94,8 +103,8 @@ export class MatchRoom extends Room<MatchState> {
     this.rules.categories.forEach((c) => this.state.categoryKeys.push(c.key));
     this.state.roomCode = makeRoomCode();
     registerCode(this.state.roomCode, this.roomId);
-    this.setPrivate(!!options.private);
-    this.setMetadata({ code: this.state.roomCode, lang, ranked });
+    this.setPrivate(solo || !!options.private); // solo rooms never show up in Quick Match
+    this.setMetadata({ code: this.state.roomCode, lang, ranked, solo });
 
     this.bag = new LetterBag(this.rules.letterPool, this.rules.letterDrawMode);
     this.clock.setInterval(() => (this.state.serverTime = Date.now()), 1000);
@@ -306,15 +315,21 @@ export class MatchRoom extends Room<MatchState> {
 
     // Layer 2 — budget-capped; the reveal proceeds either way
     const judged = await validateWithAI(pendingAI, letter, lang, this.rules);
+    // Only answers the referee LOOKED AT and still couldn't call are candidates for a
+    // vote. Anything it never judged — no API key, a timeout, a dropped batch — is a
+    // referee outage, not a hard word, and dumping a whole round on the room for that
+    // is worse than letting it stand.
+    const refereeUnsure = new Set<string>();
     judged.forEach((j, i) => {
       const p = pendingAI[i];
       if (!p) return;
       const cell = this.answers[p.pid]?.[p.category];
       if (cell) { cell.verdict = j.verdict; cell.reason = j.reason; }
+      if (j.verdict === "uncertain") refereeUnsure.add(this.reviewKey(p.pid, p.category));
     });
 
-    // Layer 3 — whatever the referee could not settle goes to the table
-    this.buildReviewQueue();
+    // Layer 3 — the handful the referee genuinely couldn't settle goes to the table
+    this.buildReviewQueue(refereeUnsure);
 
     this.finalizeScores();
 
@@ -359,13 +374,21 @@ export class MatchRoom extends Room<MatchState> {
     return [...this.state.players.values()].filter((p) => p.connected && p.pid !== targetPid).length;
   }
 
-  private buildReviewQueue() {
+  /**
+   * Whether an answer is a real animal or a real city is a matter of fact — the
+   * referee settles those alone and an unsure verdict simply stands. Only a given
+   * name or a famous person is worth the room's time, because that is where the
+   * players genuinely know something the referee doesn't.
+   */
+  private buildReviewQueue(refereeUnsure: Set<string>) {
     this.reviewQueue = [];
-    if (!this.rules.enablePeerReview) return;
+    if (!this.rules.enablePeerReview || refereeUnsure.size === 0) return;
     for (const c of this.rules.categories) {
+      if (!c.humanReviewable) continue;
       for (const pid of Object.keys(this.answers)) {
         const cell = this.answers[pid][c.key];
         if (!cell || cell.verdict !== "uncertain" || !cell.raw.trim()) continue;
+        if (!refereeUnsure.has(this.reviewKey(pid, c.key))) continue;
         if (this.votersFor(pid) === 0) continue; // nobody to ask — acceptUncertain decides
         this.reviewQueue.push({
           targetPid: pid, category: c.key, source: "ai",

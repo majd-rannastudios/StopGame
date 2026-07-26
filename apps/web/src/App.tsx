@@ -206,6 +206,10 @@ function Home({ lang, setLang, onError }: { lang: UILang; setLang: (l: UILang) =
           onClick={() => go(() => game.createRoom(name.trim(), { lang, rounds, difficulty, roundSeconds: secs }))}>
           {t("createRoom", lang)}
         </button>
+        <button className="btn ghost" disabled={busy}
+          onClick={() => go(() => game.createSolo(name.trim(), { lang, rounds, difficulty, roundSeconds: secs }))}>
+          🕐 {t("soloPlay", lang)}
+        </button>
       </div>
 
       <button className="btn" disabled={busy} onClick={() => go(() => game.quickMatch(name.trim(), lang))}>
@@ -235,7 +239,7 @@ function Lobby({ state, lang, onToast }: { state: any; lang: UILang; onToast: (m
     const text = `${location.origin}?join=${state.roomCode}`;
     try { await navigator.clipboard.writeText(text); onToast(t("copied", lang)); } catch { /* noop */ }
   };
-  const enough = players.length >= 2;
+  const enough = players.length >= 2 || !!state.solo;
   return (
     <div className="stack">
       <div className="topBar">
@@ -379,9 +383,13 @@ function Play({ state, lang }: { state: any; lang: UILang }) {
       </div>
       <TimerBar deadlineTs={state.deadlineTs} totalMs={totalMs} />
 
-      <div className="oppStrip" aria-label="opponents progress">
-        {others.map((p) => <OppPill key={p.pid} p={p} total={CATS.length} />)}
-      </div>
+      {state.solo ? (
+        <div className="muted center" style={{ fontSize: 12 }}>{t("soloNoRivals", lang)}</div>
+      ) : (
+        <div className="oppStrip" aria-label="opponents progress">
+          {others.map((p) => <OppPill key={p.pid} p={p} total={CATS.length} />)}
+        </div>
+      )}
 
       <div className="stack" style={{ gap: 9 }}>
         {CATS.map((c, i) => {
@@ -423,7 +431,7 @@ function Play({ state, lang }: { state: any; lang: UILang }) {
         })}
       </div>
 
-      <EmoteBar />
+      {!state.solo && <EmoteBar />}
 
       <button
         className={`stopBtn ${allFilled ? "armed" : ""}`}
@@ -543,7 +551,8 @@ function Reveal({ state, lang, reveal }: { state: any; lang: UILang; reveal: Rev
                   {why && <div className="ansWhy">{why}</div>}
                 </div>
                 <span className={`badge ${cls}`}>
-                  {cls === "unique" ? t("unique", lang)
+                  {/* "Only one!" is a boast about beating other players — meaningless solo */}
+                  {cls === "unique" ? t(state.solo ? "validBadge" : "unique", lang)
                     : cls === "dup" ? t("duplicate", lang)
                     : cls === "pend" ? t("underReview", lang)
                     : a?.raw?.trim() ? t("invalid", lang) : t("blank", lang)}
@@ -574,7 +583,7 @@ function Reveal({ state, lang, reveal }: { state: any; lang: UILang; reveal: Rev
         ))}
       </div>
 
-      <EmoteBar />
+      {!state.solo && <EmoteBar />}
       {canReady && <NextRoundGate state={state} lang={lang} />}
       {review?.open && <VoteSheet state={state} lang={lang} />}
     </div>
@@ -589,17 +598,22 @@ function NextRoundGate({ state, lang }: { state: any; lang: UILang }) {
   const blocked = state.review?.open;
   return (
     <div className="card stack center gate" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
-      <div className="readyDots">
-        {connected.map((p) => (
-          <span key={p.pid} className={`readyDot ${p.ready ? "on" : ""}`} title={p.name} />
-        ))}
-      </div>
-      <div className="muted">{readyCount}/{connected.length} {t("ready", lang)}</div>
-      <button className={`btn ${me?.ready ? "ghost" : "red"}`} disabled={blocked}
+      {/* Solo has nobody to wait for, so the gate is just a continue button. */}
+      {!state.solo && (
+        <>
+          <div className="readyDots">
+            {connected.map((p) => (
+              <span key={p.pid} className={`readyDot ${p.ready ? "on" : ""}`} title={p.name} />
+            ))}
+          </div>
+          <div className="muted">{readyCount}/{connected.length} {t("ready", lang)}</div>
+        </>
+      )}
+      <button className={`btn ${me?.ready && !state.solo ? "ghost" : "red"}`} disabled={blocked}
         onClick={() => { sfx.pop(); game.ready(!me?.ready); }}>
-        {me?.ready ? `✓ ${t("ready", lang)}` : t("nextRound", lang)}
+        {me?.ready && !state.solo ? `✓ ${t("ready", lang)}` : t("nextRound", lang)}
       </button>
-      {me?.ready && !blocked && <div className="muted center">{t("waitingOthers", lang)}</div>}
+      {me?.ready && !blocked && !state.solo && <div className="muted center">{t("waitingOthers", lang)}</div>}
     </div>
   );
 }
@@ -674,29 +688,47 @@ function Podium({ state, lang, standings }: { state: any; lang: UILang; standing
   return (
     <div className="stack center">
       <div className="brand"><span className="word" style={{ fontSize: 30 }}>STOP!</span></div>
-      <div className="muted">{t("winner", lang)}</div>
-      <div className="display" style={{ fontSize: 30, color: "var(--amber)" }}>{s1?.name}</div>
-      <div className="podium">
-        {s2 && <div className="podCol p2"><Avatar name={s2.name} /><div className="podBar">2</div><div className="muted">{s2.score}</div></div>}
-        {s1 && <div className="podCol p1"><Avatar name={s1.name} /><div className="podBar">1</div><div className="scoreVal">{s1.score}</div></div>}
-        {s3 && <div className="podCol p3"><Avatar name={s3.name} /><div className="podBar">3</div><div className="muted">{s3.score}</div></div>}
-      </div>
-      <div className="stack" style={{ width: "100%" }}>
-        {standings.slice(3).map((s) => (
-          <div className="scoreRow" key={s.pid}>
-            <span className="rankNum">{s.placement}</span>
-            <span style={{ flex: 1, textAlign: "start" }}>{s.name}</span>
-            <span className="scoreVal">{s.score}</span>
+
+      {state.solo ? (
+        // No rostrum for one player — the number is the whole story.
+        <>
+          <div className="muted">{t("soloDone", lang)}</div>
+          <div className="display soloScore">{s1?.score ?? 0}</div>
+          <div className="muted">
+            {state.totalRounds} × {t("round", lang)} · {t("soloNoRivals", lang)}
           </div>
-        ))}
-      </div>
-      <EmoteBar />
+        </>
+      ) : (
+        <>
+          <div className="muted">{t("winner", lang)}</div>
+          <div className="display" style={{ fontSize: 30, color: "var(--amber)" }}>{s1?.name}</div>
+          <div className="podium">
+            {s2 && <div className="podCol p2"><Avatar name={s2.name} /><div className="podBar">2</div><div className="muted">{s2.score}</div></div>}
+            {s1 && <div className="podCol p1"><Avatar name={s1.name} /><div className="podBar">1</div><div className="scoreVal">{s1.score}</div></div>}
+            {s3 && <div className="podCol p3"><Avatar name={s3.name} /><div className="podBar">3</div><div className="muted">{s3.score}</div></div>}
+          </div>
+          <div className="stack" style={{ width: "100%" }}>
+            {standings.slice(3).map((s) => (
+              <div className="scoreRow" key={s.pid}>
+                <span className="rankNum">{s.placement}</span>
+                <span style={{ flex: 1, textAlign: "start" }}>{s.name}</span>
+                <span className="scoreVal">{s.score}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!state.solo && <EmoteBar />}
       <div className="spacer" />
-      <div className="muted center">{readyCount}/{connected.length} {t("playAgain", lang)}</div>
-      <button className={`btn ${me?.ready ? "ghost" : "red"}`} onClick={() => { sfx.pop(); game.ready(!me?.ready); }}>
-        {me?.ready ? `✓ ${t("ready", lang)}` : t("playAgain", lang)}
+      {!state.solo && (
+        <div className="muted center">{readyCount}/{connected.length} {t("playAgain", lang)}</div>
+      )}
+      <button className={`btn ${me?.ready && !state.solo ? "ghost" : "red"}`}
+        onClick={() => { sfx.pop(); game.ready(!me?.ready); }}>
+        {me?.ready && !state.solo ? `✓ ${t("ready", lang)}` : t("playAgain", lang)}
       </button>
-      {me?.ready && <div className="muted center">{t("waitingOthers", lang)}</div>}
+      {me?.ready && !state.solo && <div className="muted center">{t("waitingOthers", lang)}</div>}
       <button className="btn ghost" onClick={() => { game.leave(); location.reload(); }}>{t("leave", lang)}</button>
     </div>
   );

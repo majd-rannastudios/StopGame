@@ -55,6 +55,8 @@ export class MatchState extends Schema {
   @type("number") roundSeconds = 120;
   /** whether the AI referee is configured on this server, so the UI can say so honestly */
   @type("boolean") aiReferee = false;
+  /** one player against the clock: no lobby, no opponents, no table votes */
+  @type("boolean") solo = false;
   @type(["string"]) categoryKeys = new ArraySchema<string>();
   @type({ map: Player }) players = new MapSchema<Player>();
   @type(ReviewState) review = new ReviewState();

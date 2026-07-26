@@ -401,3 +401,11 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }
 }
+
+/* solo: the score is the whole story, so give it the room a podium would take */
+.soloScore {
+  font-size: 76px; line-height: 1; color: var(--amber);
+  text-shadow: 0 5px 0 rgba(0, 0, 0, 0.5);
+  animation: landPop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1);
+  margin: 6px 0;
+}

@@ -6,6 +6,7 @@ import { Server, matchMaker } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { MatchRoom } from "./rooms/MatchRoom";
 import { resolveCode } from "./codeRegistry";
+import { isAIAvailable } from "./validation/engine";
 
 /**
  * A single bad client interaction (e.g. joining a room mid-match) must never take down
@@ -80,5 +81,13 @@ server
   .then(() => {
     serving = true;
     console.log(`⛔ STOP game server listening on :${PORT}`);
+    // Say this out loud at boot: without a key every unknown word is unjudged, which
+    // is a very different game, and it is otherwise invisible until players complain.
+    if (isAIAvailable()) {
+      console.log(`   AI referee: ON (${process.env.AI_VALIDATOR_MODEL || "claude-haiku-4-5"})`);
+    } else {
+      console.warn("   AI referee: OFF — ANTHROPIC_API_KEY is not set.");
+      console.warn("   Answers outside the wordlist cannot be judged and will be accepted as-is.");
+    }
   })
   .catch((err) => fatal("listen failed", err));

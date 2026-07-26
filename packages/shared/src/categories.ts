@@ -9,6 +9,8 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
   {
     key: "name",
     icon: "🧑",
+    // a name that is real somewhere is real; the room often knows what the referee can't
+    humanReviewable: true,
     label: { en: "Name", fr: "Prénom", ar: "اسم" },
     aiRule:
       "a given name (first name) that real people are actually called, in any culture. " +
@@ -49,6 +51,8 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
   {
     key: "celebrity",
     icon: "⭐",
+    // regional fame is precisely what the players know and the referee may not
+    humanReviewable: true,
     label: { en: "Famous person", fr: "Célébrité", ar: "مشهور" },
     aiRule:
       "a real, publicly known person — living or historical — such as an actor, musician, athlete, " +
