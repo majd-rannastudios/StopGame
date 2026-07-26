@@ -52,6 +52,13 @@ export class GameClient {
     this.wire();
   }
 
+  /** One player against the clock — no lobby to sit in, so start straight away. */
+  async createSolo(name: string, opts: RoomOptions) {
+    this.room = await this.client.create("match", { name, ...opts, solo: true, private: true });
+    this.wire();
+    this.room.send(C2S.START); // the creator is the host, so this is theirs to send
+  }
+
   async joinByCode(name: string, code: string) {
     const res = await fetch(`${API_URL}/api/resolve/${encodeURIComponent(code)}`);
     if (!res.ok) throw new Error("room_not_found");
