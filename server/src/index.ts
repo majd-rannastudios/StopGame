@@ -45,7 +45,20 @@ app.use((_, res, next) => {
   next();
 });
 
-app.get("/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
+/**
+ * Health + referee status. Whether the referee is configured is already broadcast to
+ * every client in room state, so nothing is disclosed here that players can't see —
+ * but having it on a plain GET means "is the key actually live on this deploy?" is
+ * one curl instead of joining a room and playing a round to find out.
+ */
+app.get("/health", (_, res) =>
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    aiReferee: isAIAvailable(),
+    model: isAIAvailable() ? process.env.AI_VALIDATOR_MODEL || "claude-haiku-4-5" : null,
+  })
+);
 
 /** Resolve an invite code → live roomId so the client can joinById. */
 app.get("/api/resolve/:code", (req, res) => {
