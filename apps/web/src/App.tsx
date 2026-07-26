@@ -490,7 +490,10 @@ function Checking({ state, lang }: { state: any; lang: UILang }) {
 function cellClass(a: ScoredCell | undefined): string {
   if (!a || !a.raw.trim() || a.verdict === "empty") return "bad";
   if (a.verdict === "invalid") return "bad";
-  if (a.verdict === "uncertain") return "pend";
+  // "Unsure" is not "pending": solo games, unreviewable categories and referee
+  // outages all leave answers unsure that no one will ever vote on. Those scored,
+  // so show them as scored — labelling them "to the table" next to "+10" is a lie.
+  if (a.pendingReview) return "pend";
   return a.unique ? "unique" : "dup";
 }
 
@@ -539,9 +542,12 @@ function Reveal({ state, lang, reveal }: { state: any; lang: UILang; reveal: Rev
           {players.map((p) => {
             const a = reveal.scored[p.pid]?.[c.key];
             const cls = cellClass(a);
+            // Anything that scored and isn't already queued can be contested —
+            // including an unsure answer the referee let through.
             const canFlag =
               state.phase === "REVEAL" && p.pid !== me && a && a.raw.trim() &&
-              a.verdict === "valid" && !a.reviewed && !review?.open;
+              (a.verdict === "valid" || a.verdict === "uncertain") &&
+              !a.reviewed && !a.pendingReview && !review?.open;
             const why = reasonText(a?.reason, lang);
             return (
               <div className={`ansRow ${cls}`} key={p.pid}>

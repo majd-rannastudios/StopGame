@@ -9,6 +9,13 @@ export interface AnswerIn {
   reason?: string;
   /** true once the table has voted on this answer */
   reviewed?: boolean;
+  /**
+   * True only while this answer is genuinely queued for a table vote. An unsure
+   * verdict is NOT the same thing: solo games, unreviewable categories and referee
+   * outages all leave answers unsure that nobody will ever vote on. Those simply
+   * count, and must not be labelled as pending.
+   */
+  pendingReview?: boolean;
 }
 
 export interface AnswerScored {
@@ -21,6 +28,8 @@ export interface AnswerScored {
   dupWith: string[];
   reason?: string;
   reviewed?: boolean;
+  /** genuinely queued for a vote — not merely unsure. See AnswerIn.pendingReview. */
+  pendingReview?: boolean;
 }
 
 export type RoundAnswers = Record<string /*playerId*/, Record<string /*catKey*/, AnswerIn>>;
@@ -81,7 +90,7 @@ export function scoreRound(
 
       scored[pid][cat.key] = {
         raw: a.raw, normalized: n, verdict, unique, points, dupWith,
-        reason: a.reason, reviewed: a.reviewed,
+        reason: a.reason, reviewed: a.reviewed, pendingReview: a.pendingReview,
       };
       totals[pid] += points;
     }
@@ -129,6 +138,7 @@ export function applyChallengeFlip(
   if (cell) {
     cell.verdict = newVerdict;
     cell.reviewed = true;
+    cell.pendingReview = false; // the table has spoken; it is no longer waiting
     if (reason) cell.reason = reason;
   }
   return next;

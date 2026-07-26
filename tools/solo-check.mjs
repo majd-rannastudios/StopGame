@@ -56,6 +56,11 @@ async function round(n) {
     await sleep(150);
   }
   if (!reveal) die(`round ${n}: no reveal`);
+  // nothing may be labelled 'to the table' in solo — there is no table
+  const mislabelled = CATS.filter(c => reveal.scored[r.sessionId]?.[c]?.pendingReview);
+  if (mislabelled.length) {
+    die(`round ${n}: ${mislabelled.join(", ")} labelled "to the table" with nobody to vote`);
+  }
   const mine = reveal.totals[r.sessionId];
   if (mine !== 60) die(`round ${n}: expected 60 (6 x unique), got ${mine}`);
   ok(`round ${n}: all six valid, ${mine} points (nothing to duplicate against)`);

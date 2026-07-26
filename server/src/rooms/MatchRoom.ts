@@ -399,6 +399,12 @@ export class MatchRoom extends Room<MatchState> {
     if (this.reviewQueue.length > this.rules.maxReviewsPerRound) {
       this.reviewQueue.length = this.rules.maxReviewsPerRound;
     }
+    // Mark only what actually made the cut, so the reveal can say "to the table"
+    // about these and nothing else. Everything trimmed by the cap simply counts.
+    for (const q of this.reviewQueue) {
+      const cell = this.answers[q.targetPid]?.[q.category];
+      if (cell) cell.pendingReview = true;
+    }
   }
 
   private openNextReview(): void {
